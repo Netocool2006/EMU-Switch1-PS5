@@ -15,7 +15,10 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${PORT_ROOT}/tools/prepare-vulkan-port.py"
     "${EDEN_PORT_DIR}/vulkan_hud.vert" "${EDEN_PORT_DIR}/vulkan_hud.frag"
     "${EDEN_PORT_DIR}/vulkan_hud_prepare.inc" "${EDEN_PORT_DIR}/vulkan_hud_draw.inc"
-    "${EDEN_PORT_DIR}/vulkan_loading.inc" "${EDEN_PORT_DIR}/vulkan_mihawkgen.inc")
+    "${EDEN_PORT_DIR}/vulkan_loading.inc" "${EDEN_PORT_DIR}/vulkan_mihawkgen.inc"
+    "${EDEN_PORT_DIR}/vulkan_pssr.inc"
+    "${EDEN_PORT_DIR}/vulkan_pssr_pass_decl.inc" "${EDEN_PORT_DIR}/vulkan_pssr_pass_use.inc"
+    "${EDEN_PORT_DIR}/vulkan_pssr_pass_end.inc")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${EDEN_PORT_DIR}/vulkan_download_batch.inc"
     "${EDEN_PORT_DIR}/vulkan_gc_downloads.inc"
@@ -34,13 +37,13 @@ list(REMOVE_ITEM video_sources vulkan_common/vulkan_instance.cpp vulkan_common/v
     renderer_vulkan/vk_rasterizer.cpp renderer_vulkan/vk_blit_screen.cpp
     renderer_vulkan/present/window_adapt_pass.cpp renderer_vulkan/renderer_vulkan.cpp
     renderer_vulkan/vk_present_manager.cpp renderer_vulkan/vk_swapchain.cpp
-    renderer_vulkan/vk_query_cache.cpp)
+    renderer_vulkan/vk_query_cache.cpp renderer_vulkan/present/fsr.cpp)
 list(APPEND video_sources "${PORT_BUILD_DIR}/vulkan_instance.cpp" "${PORT_BUILD_DIR}/vulkan_wrapper.cpp"
     "${PORT_BUILD_DIR}/vulkan_rasterizer.cpp" "${PORT_BUILD_DIR}/vulkan_blit_screen.cpp"
     "${PORT_BUILD_DIR}/vulkan_window_adapt_pass.cpp" "${PORT_BUILD_DIR}/vulkan_renderer.cpp"
     "${PORT_BUILD_DIR}/vulkan_library.cpp" "${EDEN_PORT_DIR}/vulkan_surface.cpp" "${EDEN_PORT_DIR}/vulkan_allocator.cpp"
     "${PORT_BUILD_DIR}/vulkan_present_manager.cpp" "${PORT_BUILD_DIR}/vulkan_swapchain.cpp"
-    "${PORT_BUILD_DIR}/vulkan_query_cache.cpp")
+    "${PORT_BUILD_DIR}/vulkan_query_cache.cpp" "${PORT_BUILD_DIR}/vulkan_fsr.cpp")
 foreach(name vk_fence_manager vk_buffer_cache vk_texture_cache vk_descriptor_buffer vk_multi_range_buffer vk_compute_pass vk_graphics_pipeline vk_compute_pipeline vk_pipeline_cache)
     list(REMOVE_ITEM video_sources renderer_vulkan/${name}.cpp)
     list(APPEND video_sources "${PORT_BUILD_DIR}/${name}_cost.cpp")
@@ -187,4 +190,10 @@ if(EDEN_PS5_MIHAWKGEN AND EXISTS "${MIHAWKGEN_ROOT}/framegen/include/framegen.h"
 elseif(EDEN_PS5_MIHAWKGEN)
     message(WARNING "MihawkGen requested but not found at ${MIHAWKGEN_ROOT}")
     set(EDEN_PS5_MIHAWKGEN OFF)
+endif()
+
+# PSSR 2: the present path (vulkan_pssr.inc, injected into the renderer) lives in video_core, so it
+# needs ENABLE_PSSR too; the option itself is declared later in CMakeLists.txt (passed as -D).
+if(EDEN_PS5_PSSR)
+    target_compile_definitions(video_core PUBLIC ENABLE_PSSR=1)
 endif()

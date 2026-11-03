@@ -54,6 +54,10 @@ vk::SurfaceKHR CreateSurface(const vk::Instance& instance,
     check(result);
     if (!count) throw vk::Exception(VK_ERROR_INITIALIZATION_FAILED);
     modes.resize(count);
+    for (const auto& offered : modes)
+        std::fprintf(stderr, "[ProsperoEden] Vulkan display mode: %ux%u @ %.2f Hz\n",
+                     offered.parameters.visibleRegion.width, offered.parameters.visibleRegion.height,
+                     offered.parameters.refreshRate / 1000.0);
     // The driver lists 120 Hz first when the output took it (display_refresh.h). A session that
     // asked for it takes that mode; any other keeps the 60 Hz one.
     const bool fast = Eden::Display::requested_hz.load() >= 120;

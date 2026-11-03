@@ -255,6 +255,8 @@ class Launcher
     int option_action() const;
     // What a Performance switch does (English, marked for translation).
     static const char *performance_about(int row);
+    // What a Video row does, for the rows that have a line ("" for the rest).
+    static const char *video_about(int row);
     // How many of a category's settings the game has of its own.
     int game_overrides(int category) const;
     // ---- profiles (profiles.cpp) ----

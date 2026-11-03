@@ -84,6 +84,7 @@ fi
 step "libSceAgcDriver link stub"
 bash tools/build-agc-driver-stub.sh
 bash tools/build-common-dialog-stub.sh
+bash tools/build-psml-stub.sh
 # The driver's display code carries this repository's adaptation (tools/patch-radv-wsi.py): a
 # driver built with another version of it is built again (only the changed file compiles).
 # So is a driver built from another Mesa revision than tools/deps.json pins.
@@ -98,7 +99,8 @@ if [[ -f $radv_release/lib/libvulkan_radeon.ps5.a ]]; then
     elif ! python3 -B tools/patch-radv-wsi.py --check "$radv_release/EDEN_WSI_SHA256" ||
          ! python3 -B tools/patch-radv-gs-compute.py --check "$radv_release/EDEN_GS_SHA256" ||
          ! python3 -B tools/patch-radv-disk-cache.py --check "$radv_release/EDEN_DISK_CACHE_SHA256" ||
-         ! python3 -B tools/patch-radv-transfer-split.py --check "$radv_release/EDEN_TRANSFER_SPLIT_SHA256"; then
+         ! python3 -B tools/patch-radv-transfer-split.py --check "$radv_release/EDEN_TRANSFER_SPLIT_SHA256" ||
+         ! python3 -B tools/patch-radv-pssr.py --check "$radv_release/EDEN_PSSR_SHA256"; then
         step "RADV: this repository's adaptation of the driver changed"
         bash tools/build-radv-dependencies.sh
         rm -f build/radv-isolated/libvulkan_radeon.ps5.a

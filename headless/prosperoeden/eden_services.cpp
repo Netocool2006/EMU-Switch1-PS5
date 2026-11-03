@@ -1038,6 +1038,8 @@ pe::ui::Preferences EdenServices::preferences() {
     result.frame_gen_method = saved.frame_gen_method;
     result.frame_gen_target = saved.frame_gen_target;
     result.frame_gen_multiplier = saved.frame_gen_multiplier;
+    result.frame_gen_level = saved.frame_gen_level;
+    result.pssr = saved.pssr;
     ReadPostPresets();
     result.post_processing = PostPresetIndex(saved.post_processing);
     result.vibration = saved.vibration;
@@ -1089,6 +1091,11 @@ bool EdenServices::set_preferences(const pe::ui::Preferences& preferences) {
     value.frame_gen_method = preferences.frame_gen_method;
     value.frame_gen_target = preferences.frame_gen_target;
     value.frame_gen_multiplier = preferences.frame_gen_multiplier;
+    // One of the levels, whatever reached the launcher: a value outside them makes the whole save
+    // fail (settings_store.h's SavePreferences).
+    value.frame_gen_level = std::clamp(preferences.frame_gen_level, 0,
+                                       static_cast<int>(std::size(Eden::kFrameGenLevelKeys)) - 1);
+    value.pssr = preferences.pssr;
     value.post_processing = PostPresetName(preferences.post_processing);
     value.vibration = preferences.vibration;
     value.vibration_strength = preferences.vibration_strength;

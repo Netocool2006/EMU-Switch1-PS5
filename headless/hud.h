@@ -141,6 +141,38 @@ inline void GuestScreen(uint32_t width, uint32_t height) {
     guest_height.store(height, std::memory_order_relaxed);
 }
 inline void ForgetGuestScreen() { GuestScreen(0, 0); }
+
+// What drew the last frame the upscaling stage handled, written by the code that did it
+// (present/fsr.cpp, PssrDraw): never a setting, always what happened. Read by the overlay's line.
+enum UpscalerState : uint32_t {
+    kUpscalerNone = 0,          // no upscaling stage ran
+    kUpscalerFsr,               // FSR drew it
+    kUpscalerPssrUnchecked,     // PSSR 2 ran and its output has not been read back yet
+    kUpscalerPssrVerified,      // PSSR 2 ran and the last read-back of its output had picture in it
+    kUpscalerPssrNoImage,       // PSSR 2 ran and the last read-back found the output empty
+    kUpscalerFsrAfterPssrError, // PSSR 2 was tried and refused: FSR drew it
+    kUpscalerPssrMismatch,      // PSSR 2 ran, wrote a picture, but it does not look like the input frame
+};
+inline std::atomic<uint32_t> upscaler{kUpscalerNone};
+inline std::atomic<uint32_t> upscaler_out_w{0}, upscaler_out_h{0};
+// 0 = not read back yet, 1 = the last read-back of PSSR 2's output looked like the input frame, 2 = it
+// was empty, 3 = it had a picture that does not match the input.
+inline std::atomic<uint32_t> upscaler_verified{0};
+// Measured on the GPU's own clock: the average time of the PSSR packets in microseconds (0 = not yet),
+// and how closely the output follows the input frame: the correlation of their luminance, in thousandths.
+inline std::atomic<uint32_t> pssr_gpu_us{0}, pssr_diff_milli{0};
+// The label of a state, in the characters the overlay's font has (capitals, digits, space).
+inline const char* UpscalerLabel(uint32_t state) {
+    switch (state) {
+    case kUpscalerFsr: return "FSR";
+    case kUpscalerPssrUnchecked: return "PSSR2 ?";
+    case kUpscalerPssrVerified: return "PSSR2 OK";
+    case kUpscalerPssrNoImage: return "PSSR2 NO IMAGE";
+    case kUpscalerFsrAfterPssrError: return "FSR PSSR ERR";
+    case kUpscalerPssrMismatch: return "PSSR2 MISMATCH";
+    default: return "";
+    }
+}
 } // namespace Hud
 // True while the snapshot is the loading screen rather than the overlay's line.
 inline bool HudLoading(const HudSnapshot& hud) {
@@ -293,20 +325,52 @@ inline std::array<char, kHudTextMax + 1> FormatHudText(const HudClock& clock, co
             put(piece);
         }
     }
+    // What upscaled it and to what size, as the stage that did it reported (Hud::upscaler).
+    if ((fields & kHudFieldResolution) != 0) {
+        const uint32_t state = Hud::upscaler.load(std::memory_order_relaxed);
+        const uint32_t out_w = Hud::upscaler_out_w.load(std::memory_order_relaxed);
+        const uint32_t out_h = Hud::upscaler_out_h.load(std::memory_order_relaxed);
+        if (state != Hud::kUpscalerNone && out_w != 0 && out_h != 0) {
+            std::snprintf(piece, sizeof(piece), " OUT %u %u %s", out_w, out_h, Hud::UpscalerLabel(state));
+            put(piece);
+            if (state == Hud::kUpscalerPssrUnchecked) {
+                // Executed, but the picture was not judged (flat scene or not checked yet): the one measurement
+                // that does not depend on the picture is still shown, the GPU time of the PSSR packets.
+                const uint32_t us = Hud::pssr_gpu_us.load(std::memory_order_relaxed);
+                if (us != 0) {
+                    std::snprintf(piece, sizeof(piece), " GPU %.1fMS", us / 1000.0);
+                    put(piece);
+                }
+            }
+            if (state == Hud::kUpscalerPssrVerified) {
+                // The two measurements behind the label: GPU time of the PSSR packets and the correlation of
+                // the output with the input frame (R, 1.00 = the same picture).
+                const uint32_t us = Hud::pssr_gpu_us.load(std::memory_order_relaxed);
+                const uint32_t diff = Hud::pssr_diff_milli.load(std::memory_order_relaxed);
+                std::snprintf(piece, sizeof(piece), " GPU %.1fMS R %.2f", us / 1000.0, diff / 1000.0);
+                put(piece);
+            }
+        }
+    }
     if (clock.fps < 0) {
         if (fields & kHudFieldFps) put(" --FPS");
         if (fields & kHudFieldMs) put(" --MS");
     } else {
+        bool generated_frames = false;
         const double shown = output.fps < 0 ? clock.fps
                                             : refresh > 0 ? std::min(output.fps, refresh) : output.fps;
         if (fields & kHudFieldFps) {
             if (shown < clock.fps + 1.5)
                 std::snprintf(piece, sizeof(piece), " %.0fFPS", clock.fps);
             else
-                std::snprintf(piece, sizeof(piece), " %.0f/%.0fFPS", clock.fps, shown);
+                // No "30/60": the first figure is what reaches the screen, and the game's own rate is named,
+                // so interpolated frames can never be mistaken for frames the game rendered.
+                std::snprintf(piece, sizeof(piece), " %.0fFPS (%.0f REAL)", shown, clock.fps);
+            generated_frames = shown >= clock.fps + 1.5;
             put(piece);
         }
-        if (fields & kHudFieldMs) {
+        // With generated frames the line has no room for the game's frame time (the overlay holds 111 characters).
+        if ((fields & kHudFieldMs) && !generated_frames) {
             std::snprintf(piece, sizeof(piece), " %.1fMS", clock.worst_ms);
             put(piece);
         }
@@ -377,6 +441,16 @@ inline HudSnapshot MakeHudSnapshot(const HudClock& clock, const HudClock& output
                                    uint32_t fields = kHudFieldAll) {
     const auto text = FormatHudText(clock, output, speed, "VLK", machine, refresh, ping_ms, fields);
     const std::string_view line{text.data()};
+    {
+        // The overlay's own line, written to the log every 5 s: what the screen shows (fps, ms, CPU, GPU,
+        // memory, the upscaler), for tests that cannot look at the screen.
+        static auto last = std::chrono::steady_clock::now();
+        const auto now = std::chrono::steady_clock::now();
+        if (now - last >= std::chrono::seconds(5)) {
+            last = now;
+            std::fprintf(stderr, "[ProsperoEden] hud: %.*s\n", static_cast<int>(line.size()), line.data());
+        }
+    }
     // The chip's scale, from the size the launcher named: 1x, 1.5x or 2x. Every one of the
     // box's numbers is taken that many times over (vulkan_hud_draw.inc and DrawHud scale alike).
     const float scale = HudSizeScale(HudSizeField(size));

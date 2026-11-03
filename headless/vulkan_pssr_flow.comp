@@ -1,0 +1,75 @@
+#version 450
+// Optical flow by block matching, for the upscaler's motion vectors.
+// For each pixel p of the current frame it looks for the displacement d in [-radius, radius]^2 that
+// minimises the sum of absolute luminance differences over a 5x5 window between the current frame at
+// p and the previous frame at p + d, refines it to a fraction of a pixel with a parabola in x and y,
+// and writes it to `motion` multiplied by `sign`. With sign = +1 the vector is the displacement from
+// the current frame to the previous one, in pixels of the input resolution. With sign = 0 it writes
+// zeros. A match that is not clearly better than no motion (eb > 0.9 * e0) gives zero.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D cur;
+layout(set = 0, binding = 1) uniform sampler2D prev;
+layout(rg16f, set = 0, binding = 2) uniform writeonly image2D motion;
+
+layout(push_constant) uniform Push {
+    uvec2 size;
+    int radius;
+    float sign;
+} pc;
+
+const vec3 LUMA = vec3(0.299, 0.587, 0.114);
+
+float luma(sampler2D tex, ivec2 q) {
+    const ivec2 last = ivec2(pc.size) - 1;
+    return dot(texelFetch(tex, clamp(q, ivec2(0), last), 0).rgb, LUMA);
+}
+
+float sad(ivec2 p, ivec2 d) {
+    float sum = 0.0;
+    for (int y = -2; y <= 2; ++y) {
+        for (int x = -2; x <= 2; ++x) {
+            const ivec2 o = ivec2(x, y);
+            sum += abs(luma(cur, p + o) - luma(prev, p + o + d));
+        }
+    }
+    return sum;
+}
+
+float refine(float e_minus, float eb, float e_plus) {
+    const float denominator = max(2.0 * (e_minus - 2.0 * eb + e_plus), 1e-4);
+    return clamp((e_minus - e_plus) / denominator, -0.5, 0.5);
+}
+
+void main() {
+    const ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(uvec2(p), pc.size))) {
+        return;
+    }
+    if (pc.sign == 0.0) {
+        imageStore(motion, p, vec4(0.0));
+        return;
+    }
+    const int radius = max(pc.radius, 0);
+    const float e0 = sad(p, ivec2(0));
+    ivec2 best = ivec2(0);
+    float eb = e0;
+    for (int dy = -radius; dy <= radius; ++dy) {
+        for (int dx = -radius; dx <= radius; ++dx) {
+            const ivec2 d = ivec2(dx, dy);
+            const float e = sad(p, d);
+            if (e < eb) {
+                eb = e;
+                best = d;
+            }
+        }
+    }
+    vec2 mv = vec2(best);
+    mv.x += refine(sad(p, best - ivec2(1, 0)), eb, sad(p, best + ivec2(1, 0)));
+    mv.y += refine(sad(p, best - ivec2(0, 1)), eb, sad(p, best + ivec2(0, 1)));
+    if (eb > 0.9 * e0) {
+        mv = vec2(0.0);
+    }
+    imageStore(motion, p, vec4(mv * pc.sign, 0.0, 0.0));
+}

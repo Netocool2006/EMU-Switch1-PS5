@@ -14,5 +14,8 @@ inline std::atomic<bool> active{false};
 inline std::string weights_path;
 inline std::atomic<int> target_rate{0};
 inline std::atomic<int> multiplier{2};
+// Settings > Video > Frame gen level (video.frame_gen_level): -1 automatic (the controller), 0..3
+// fixed. MihawkGen::Create reads it unless fg-level.txt in the app folder overrides it.
+inline std::atomic<int> level{-1};
 
 } // namespace Eden::MihawkGenBridge

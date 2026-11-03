@@ -43,6 +43,7 @@ fi
     "${tls_flags[@]}" "${radv_link_flags[@]}" -L "$sdk/target/lib" \
     --defsym=__dlopen=0 --defsym=__dlsym=0 --defsym=__dladdr=0 \
     --defsym=__dlclose=0 --defsym=__dlerror=0 \
+    -z nodynamic-undefined-weak \
     -T "$template/tooling/native/ps5-pie.ld" -T "$root/tools/unwind.ld" \
     --eh-frame-hdr --gc-sections --version-script "$root/tools/app-symbols.map" -e _start \
     --no-dynamic-linker \

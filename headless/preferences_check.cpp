@@ -146,7 +146,8 @@ int main() {
 
     // Resolution and upscaling filter (Settings > Video).
     auto video = Eden::LoadPreferences(file);
-    assert(video.resolution == Eden::kNativeResolution && video.upscaling_filter == 0);
+    assert(video.resolution == Eden::kDefaultResolution && video.upscaling_filter == 0);
+    assert(Eden::kDefaultResolution == 7 && std::string(Eden::kResolutionKeys[video.resolution]) == "5x");
     video.resolution = 1;
     video.upscaling_filter = 1;
     assert(Eden::SavePreferences(video, file));
@@ -237,6 +238,26 @@ int main() {
     assert(Read(file).find("\"frame_gen_method\": \"mihawkgen\"") != std::string::npos);
     video.frame_gen_method = 0;
     assert(Eden::SavePreferences(video, file));
+    // The frame generation level defaults to "auto" (index 0) and round-trips as its key; nothing
+    // beyond the list is saved.
+    assert(video.frame_gen_level == 0);
+    assert(Read(file).find("\"frame_gen_level\": \"auto\"") != std::string::npos);
+    video.frame_gen_level = 2;  // "2"
+    assert(Eden::SavePreferences(video, file));
+    assert(Eden::LoadPreferences(file).frame_gen_level == 2);
+    assert(Read(file).find("\"frame_gen_level\": \"2\"") != std::string::npos);
+    video.frame_gen_level = int(std::size(Eden::kFrameGenLevelKeys));
+    assert(!Eden::SavePreferences(video, file));
+    video.frame_gen_level = 0;
+    assert(Eden::SavePreferences(video, file));
+    // PSSR 2 (Settings > Video): off unless chosen, a switch, so the file holds a boolean.
+    assert(!video.pssr);
+    assert(Read(file).find("\"pssr\": false") != std::string::npos);
+    video.pssr = true;
+    assert(Eden::SavePreferences(video, file) && Eden::LoadPreferences(file).pssr);
+    assert(Read(file).find("\"pssr\": true") != std::string::npos);
+    video.pssr = false;
+    assert(Eden::SavePreferences(video, file) && !Eden::LoadPreferences(file).pssr);
 
     // Vibration (Settings > Controls): on unless turned off.
     auto controls = Eden::LoadPreferences(file);

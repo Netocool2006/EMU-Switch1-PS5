@@ -342,6 +342,8 @@ struct Preferences
     int frame_gen_method = 0;      // 0 Lossless Scaling, 1 MihawkGen
     int frame_gen_target = 0;      // index into kFrameGenTargetKeys: 0 auto, then 60/90/120/144/240
     int frame_gen_multiplier = 0;  // index into kFrameGenMultiplierKeys: 2x, 3x, 4x
+    int frame_gen_level = 0;       // index into kFrameGenLevelKeys: 0 auto, then 1, 2, 3 extra frames
+    bool pssr = false;             // PSSR 2 upscaler (PS5 Pro, Vulkan); off by default
     int post_processing = 0;       // index into Services::post_processing_labels: 0 off, then a preset
     bool vibration = true;
     int vibration_strength = 100; // percent of what a game asks for: 25, 50, 75 or 100

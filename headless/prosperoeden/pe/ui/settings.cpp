@@ -64,6 +64,7 @@ enum VideoRow : int
     video_renderer,
     video_output,
     video_resolution,
+    video_pssr,            // the PSSR 2 upscaler's switch (Preferences::pssr)
     video_filter,
     video_astc,
     video_refresh,
@@ -75,6 +76,7 @@ enum VideoRow : int
     video_frame_gen_method,
     video_frame_gen_target,
     video_frame_gen_multiplier,
+    video_frame_gen_level,  // MihawkGen's level (settings_store.h's kFrameGenLevelKeys)
     kVideoRows,
 };
 // The overlay's options (Modal::hud): what its line says, and how the chip is drawn. Opened from
@@ -100,7 +102,8 @@ enum HudRow : int
 constexpr int kFrameGenMethods = 2;     // Lossless Scaling, MihawkGen (settings_store.h)
 constexpr int kFrameGenTargets = 6;     // Auto, 60, 90, 120, 144, 240 Hz (settings_store.h)
 constexpr int kFrameGenMultipliers = 3; // 2x, 3x, 4x
-constexpr int kHudSizes = 3;            // Regular, Medium, Large (settings_store.h, kHudSizeKeys)
+constexpr int kFrameGenLevels = 4;      // auto, 1, 2, 3 (settings_store.h, kFrameGenLevelKeys)
+constexpr int kHudSizes = 3;           // Regular, Medium, Large (settings_store.h, kHudSizeKeys)
 constexpr int kHudCorners = 4;          // kHudCornerNames, services.hpp
 constexpr int kHudRowsShown = 5;
 constexpr float kVideoRowsTop = 334.0f;
@@ -163,6 +166,9 @@ constexpr int kSpeedLimits = static_cast<int>(std::size(kSpeedLimitPercents));
 constexpr const char *kFrameGenMethodNames[] = {"Lossless Scaling", "MihawkGen"};
 constexpr const char *kFrameGenTargetNames[] = {"", "60", "90", "120", "144", "240"};
 constexpr const char *kFrameGenMultiplierNames[] = {"2x", "3x", "4x"};
+// The same order as settings_store.h's kFrameGenLevelKeys; drawn through tr().
+constexpr const char *kFrameGenLevelNames[kFrameGenLevels] = {
+    TR("Automatic"), TR("1 extra frame"), TR("2 extra frames"), TR("3 extra frames")};
 
 const char *on_off(bool value)
 {
@@ -542,6 +548,19 @@ const char *Launcher::performance_about(int row)
     return kAbout[row];
 }
 
+const char *Launcher::video_about(int row)
+{
+    // Only the rows whose value does not say what they do have a line (drawn under the window, as
+    // Performance's are).
+    if (row == video_pssr)
+        return TR("Runs the PS5 Pro upscaler on the game image. Off by default: with this emulator it "
+                  "does not improve the picture over rendering at a higher resolution.");
+    if (row == video_frame_gen_level)
+        return TR("Automatic adds frames only when a game stays under 40 fps. Fixed levels add that "
+                  "many frames between real ones. Needs Frame generation on.");
+    return "";
+}
+
 // ---------------------------------------------------------------- dialogs
 
 int Launcher::dialog_rows(Modal modal) const
@@ -758,6 +777,8 @@ void Launcher::press_dialog(Key key)
             const int count = static_cast<int>(services_.resolution_labels().size());
             prefs_.resolution = (prefs_.resolution + step + count) % count;
         }
+        else if (option_ == video_pssr)
+            prefs_.pssr = !prefs_.pssr;
         else if (option_ == video_filter)
         {
             const int count = static_cast<int>(services_.filter_labels().size());
@@ -812,6 +833,9 @@ void Launcher::press_dialog(Key key)
         else if (option_ == video_frame_gen_multiplier)
             prefs_.frame_gen_multiplier = (std::clamp(prefs_.frame_gen_multiplier, 0, kFrameGenMultipliers - 1) + step +
                                            kFrameGenMultipliers) % kFrameGenMultipliers;
+        else if (option_ == video_frame_gen_level)
+            prefs_.frame_gen_level = (std::clamp(prefs_.frame_gen_level, 0, kFrameGenLevels - 1) + step +
+                                      kFrameGenLevels) % kFrameGenLevels;
         else
             prefs_.hud = !prefs_.hud; // the FPS overlay's own switch
         break;
@@ -1078,6 +1102,7 @@ void Launcher::draw_dialog(Canvas &c, Modal modal, float open)
             prefs_.renderer != 0 ? tr("Vulkan (recommended)") : "OpenGL",
             output_name(prefs_.output),
             pick(services_.resolution_labels(), prefs_.resolution),
+            std::string{}, // PSSR 2: a switch
             pick(services_.filter_labels(), prefs_.filter),
             pick(services_.astc_labels(), prefs_.astc),
             hertz(prefs_.refresh),
@@ -1089,16 +1114,19 @@ void Launcher::draw_dialog(Canvas &c, Modal modal, float open)
             prefs_.frame_gen_target <= 0 ? std::string{tr("Auto")} :
                 fill(tr("{0} Hz"), {kFrameGenTargetNames[std::clamp(prefs_.frame_gen_target, 1, kFrameGenTargets - 1)]}),
             kFrameGenMultiplierNames[std::clamp(prefs_.frame_gen_multiplier, 0, kFrameGenMultipliers - 1)],
+            tr(kFrameGenLevelNames[std::clamp(prefs_.frame_gen_level, 0, kFrameGenLevels - 1)]),
         };
+        static_assert(sizeof(values) / sizeof(values[0]) == kVideoRows, "one value per Video row");
         const bool lsfg_locked = services_.frame_gen_state() != 2;
         const bool mihawkgen_locked = services_.mihawkgen_state() != 2;
         const bool frame_gen_locked = prefs_.frame_gen_method == 0 ? lsfg_locked :
                                       prefs_.frame_gen_method == 1 ? mihawkgen_locked : true;
         static constexpr const char *kNames[kVideoRows] = {
-            TR("Renderer"),         TR("Output resolution"), TR("Resolution"),
+            TR("Renderer"),         TR("Output resolution"), TR("Resolution"),        TR("PSSR 2 upscaler"),
             TR("Upscaling filter"), TR("ASTC textures"),     TR("Refresh rate"),
             TR("FPS overlay"),      TR("Overlay options"),   TR("Post-processing"),
-            TR("Frame generation"), TR("Frame gen method"),  TR("Frame gen target"),  TR("Frame gen multiplier")};
+            TR("Frame generation"), TR("Frame gen method"),  TR("Frame gen target"),  TR("Frame gen multiplier"),
+            TR("Frame generation level")};
         for (int row = first; row <= last; ++row)
         {
             list.push_opacity(video_rows_.row_alpha(row, kVideoRowHeight));
@@ -1106,6 +1134,12 @@ void Launcher::draw_dialog(Canvas &c, Modal modal, float open)
             {
                 label(row, tr(kNames[row]), kToggle);
                 toggle(c, 1292.0f, row_centre(row), knob);
+            }
+            else if (row == video_pssr)
+            {
+                // A switch too: its state is switch_states()'s second (launcher.cpp).
+                label(row, tr(kNames[row]), kToggle);
+                toggle(c, 1292.0f, row_centre(row), tween::clamp01(switches_[1].value));
             }
             else if (row == video_overlay_options)
             {
@@ -1402,6 +1436,13 @@ void Launcher::draw_dialog(Canvas &c, Modal modal, float open)
     {
         // What the highlighted switch (or the speed limit) does, under the window.
         text_block(c, tr(performance_about(option_)), 592.0f,
+                   baseline(window.y + window.h + 22.0f, 30.0f, th().size_small), th().size_small, 30.0f,
+                   th().meta, 736.0f, 2, kShrink);
+    }
+    if (modal == Modal::video && *video_about(option_))
+    {
+        // What the highlighted row does, for PSSR 2 and the frame generation level.
+        text_block(c, tr(video_about(option_)), 592.0f,
                    baseline(window.y + window.h + 22.0f, 30.0f, th().size_small), th().size_small, 30.0f,
                    th().meta, 736.0f, 2, kShrink);
     }

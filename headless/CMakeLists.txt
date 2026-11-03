@@ -3127,11 +3127,21 @@ target_link_libraries(eden-headless PRIVATE core eden-pad)
 # A game's text entry on the PS5's own on-screen keyboard (system_keyboard.h, keyboard_applet.h).
 target_sources(eden-headless PRIVATE "${EDEN_PORT_DIR}/system_keyboard.cpp")
 target_sources(eden-headless PRIVATE "${EDEN_PORT_DIR}/multiplayer.cpp")
+option(EDEN_PS5_PSSR "PSSR 2 (libScePsml Mfsr2) upscaling bridge" OFF)
+target_sources(eden-headless PRIVATE "${EDEN_PORT_DIR}/pssr_bridge.cpp")
+if(EDEN_PS5_PSSR)
+    target_compile_definitions(eden-headless PRIVATE ENABLE_PSSR=1)
+endif()
 target_include_directories(eden-headless BEFORE PRIVATE "${MULTIPLAYER_SOCKET_HEADERS}" "${MULTIPLAYER_OUTPUT}")
 if(PS5_NATIVE)
     target_link_libraries(eden-headless PRIVATE
         "${sdk}/target/lib/libSceImeDialog.so" "${sdk}/target/lib/libSceSysmodule.so"
         "${PORT_ROOT}/build/stubs/libSceCommonDialog.so")
+    if(EDEN_PS5_PSSR)
+        # libScePsml is imported at link time (the console's loader refuses a run-time load and
+        # sceKernelDlsym finds nothing); tools/stubs/libScePsml.c.
+        target_link_libraries(eden-headless PRIVATE "${PORT_ROOT}/build/stubs/libScePsml.so")
+    endif()
 endif()
 add_library(eden-metadata STATIC "${EDEN_PORT_DIR}/metadata_bridge.cpp")
 target_include_directories(eden-metadata PUBLIC "${EDEN_PORT_DIR}" PRIVATE "${PROJECT_SOURCE_DIR}/src")

@@ -12,6 +12,7 @@
 #include "guest_fault.h"
 #include "jit_list.h"
 #include "boot_trace.h"
+#include "pssr_bridge.h"
 #ifdef PS5_NATIVE
 #include "elevation/elevation.hpp"
 #include <cerrno>
@@ -129,6 +130,7 @@ extern "C" unsigned long long eden_dmb_dropped, eden_checkbit_fused;
 #endif
 #ifdef EDEN_PS5_MIHAWKGEN
 #include "mihawkgen_bridge.h"
+#include "pssr_bridge.h"
 #endif
 #include "profiles.h"
 #include "stop_limit.h"
@@ -295,6 +297,8 @@ int main(int argc, char** argv) {
         // The PS5 keyboard's module, for a game's text entry: asked for before anything else
         // changes what the app may load (system_keyboard.h).
         Eden::BootTrace::Line("PS5 keyboard module: %#x", static_cast<unsigned>(Eden::PrepareSystemKeyboard()));
+        // PSSR 2's module (libScePsml), same reason and same moment (pssr_bridge.h).
+        Eden::BootTrace::Line("PSSR module by id: %#x", static_cast<unsigned>(Eden::PssrBridge::PreparePssrModule()));
         Eden::BootTrace::Line("requesting filesystem access");
         // Filesystem access beyond the sandbox, first: every path below depends on it
         // (assets_dir.h). A resident upstream Lapy service gets the first opportunity; otherwise
@@ -1095,7 +1099,8 @@ int main(int argc, char** argv) {
             static constexpr Settings::ResolutionSetup resolutions[] = {
                 Settings::ResolutionSetup::Res1_2X, Settings::ResolutionSetup::Res3_4X, Settings::ResolutionSetup::Res1X,
                 Settings::ResolutionSetup::Res3_2X, Settings::ResolutionSetup::Res2X, Settings::ResolutionSetup::Res3X,
-                Settings::ResolutionSetup::Res4X};
+                Settings::ResolutionSetup::Res4X, Settings::ResolutionSetup::Res5X, Settings::ResolutionSetup::Res6X,
+                Settings::ResolutionSetup::Res7X, Settings::ResolutionSetup::Res8X};
             static_assert(std::size(resolutions) == std::size(Eden::kResolutionKeys));
             static constexpr Settings::ScalingFilter filters[] = {
                 Settings::ScalingFilter::Bilinear, Settings::ScalingFilter::Fsr, Settings::ScalingFilter::Bicubic,
@@ -1227,6 +1232,9 @@ int main(int argc, char** argv) {
                             : Eden::AppDir() + "/mihawkgen/network.fgw";
                     Eden::MihawkGenBridge::target_rate.store(target);
                     Eden::MihawkGenBridge::multiplier.store(multiplier);
+                    // Settings > Video > Frame gen level: "auto" (index 0) is the controller, -1;
+                    // 1..3 fix the level (kFrameGenLevelKeys; fg-level.txt overrides, mihawkgen.cpp).
+                    Eden::MihawkGenBridge::level.store(video.frame_gen_level == 0 ? -1 : video.frame_gen_level);
                     Settings::values.frame_gen.SetValue(true);
                     Settings::values.frame_gen_target_rate.SetValue(
                         static_cast<unsigned>(std::min(target, 240)));
@@ -1241,6 +1249,44 @@ int main(int argc, char** argv) {
                               " at " + Eden::MihawkGenBridge::weights_path).c_str());
 #endif
             }
+#ifdef ENABLE_PSSR
+            // PSSR 2 (PS5 Pro): on when Settings > Video > PSSR (video.pssr) is on and pssr_off.txt
+            // does not exist in the app folder (a development override that switches it off). Every
+            // step is logged with the "pssr" stage; the renderer logs frame counts and dispatch results.
+            {
+                auto& pssr = Eden::PssrBridge::config;
+                const bool pssr_file_off = Eden::FileExists(Eden::AppFile("pssr_off.txt"));
+                pssr.enabled = video.pssr && !pssr_file_off;
+                if (!pssr.enabled)
+                    Eden::Report("pssr", pssr_file_off ? "off: pssr_off.txt in the app folder"
+                                                       : "off: Settings > Video > PSSR is off");
+                pssr.output_width = static_cast<uint16_t>(Eden::kOutputWidth[video.output]);
+                pssr.output_height = static_cast<uint16_t>(Eden::kOutputHeight[video.output]);
+                const int pssr_rc = Eden::PssrBridge::InitializePSSRWithArena();
+                Eden::Report("pssr", ("init result " + std::to_string(pssr_rc) +
+                                      (Eden::PssrBridge::ready.load() ? " (ready)" : " (NOT ready)"))
+                                         .c_str());
+                // PSSR 2 takes the place of drawing the game at several times its resolution: with it ready,
+                // a scale above 1x is drawn at 1x and PSSR lifts the picture to the output size (the GPU
+                // draws a quarter of the pixels). pssr_keep_scale.txt in the app folder keeps the chosen scale.
+                // The indexes of `resolutions`: 0 = 1/2x, 1 = 3/4x, 2 = 1x, 3 = 3/2x, 4 = 2x, 5 = 3x, 6 = 4x, 7..10 = 5x..8x.
+                if (Eden::PssrBridge::ready.load() && resolution >= 3 &&
+                    !Eden::FileExists(Eden::AppFile("pssr_keep_scale.txt"))) {
+                    Settings::values.resolution_setup.SetValue(Settings::ResolutionSetup::Res1X);
+                    Eden::Report("pssr", (std::string("PSSR 2 ready: the game is drawn at 1x instead of ") +
+                                          Eden::kResolutionKeys[resolution] +
+                                          " and PSSR upscales it to the output (pssr_keep_scale.txt keeps the scale)")
+                                             .c_str());
+                }
+                // PSSR 2 runs inside the FSR pass of the presenter (present/fsr.cpp): another upscaling filter
+                // would leave that pass out and the picture would be scaled without it.
+                if (Eden::PssrBridge::ready.load() && filters[filter] != Settings::ScalingFilter::Fsr) {
+                    Settings::values.scaling_filter.SetValue(Settings::ScalingFilter::Fsr);
+                    Eden::Report("pssr", (std::string("PSSR 2 ready: the scaling filter is FSR's pass (the chosen ") +
+                                          Eden::kUpscalingFilterLabels[filter] + " would bypass PSSR)").c_str());
+                }
+            }
+#endif
             // The output's refresh rate while the game runs (display_refresh.h): the renderer asks
             // for it as it opens the output.
             const int refresh = video.refresh;
@@ -1256,6 +1302,18 @@ int main(int argc, char** argv) {
                                     Eden::kUpscalingFilterLabels[filter] + ", output " +
                                     Eden::kOutputKeys[video.output] + ", " + Eden::kRefreshKeys[refresh] +
                                     " Hz, ASTC textures " + (astc_full ? "decoded" : "as BC3")).c_str());
+#ifdef ENABLE_PSSR
+            Eden::Report("pssr", (std::string("EFFECTIVE VIDEO CONFIG: output ") + Eden::kOutputKeys[video.output] +
+                                  ", internal " +
+                                  (Settings::values.resolution_setup.GetValue() == Settings::ResolutionSetup::Res1X
+                                       ? "1x" : Eden::kResolutionKeys[resolution]) +
+                                  ", filter " +
+                                  (Settings::values.scaling_filter.GetValue() == Settings::ScalingFilter::Fsr
+                                       ? (Eden::PssrBridge::ready.load() ? "FSR pass (PSSR 2 inside)" : "FSR")
+                                       : Eden::kUpscalingFilterLabels[filter]) +
+                                  ", requested refresh " + Eden::kRefreshKeys[refresh] + " Hz, PSSR " +
+                                  (Eden::PssrBridge::ready.load() ? "ready" : "NOT ready")).c_str());
+#endif
             // Speed against accuracy ("performance" in the settings file, settings_store.h): each
             // one is off unless chosen there, for every game or for this one. The levels start
             // every session at their exact values (above), so one that is not chosen is off.
@@ -1994,8 +2052,12 @@ int main(int argc, char** argv) {
 #elif defined(EDEN_DEV_ROM_ID)
                         // Bounded compatibility probe (10 minutes; the runner usually closes
                         // the title first); use the ordinary teardown path.
+                        // Only when probe.txt exists in the app folder: a played session must not write a 4K
+                        // picture to disk every 5 seconds, nor end by itself after ten minutes.
+                        const bool probe_requested = Eden::FileExists(Eden::AppFile("probe.txt"));
+                        if (!probe_requested) completion->wake.wait(lock, completed);
                         constexpr unsigned observation_samples = 120;
-                        for (unsigned sample = 0; sample < observation_samples; ++sample) {
+                        for (unsigned sample = 0; probe_requested && sample < observation_samples; ++sample) {
                             if (completion->wake.wait_for(lock, std::chrono::seconds(5), completed)) break;
                             if (sample == observation_samples - 1) {
                                 completion->return_to_menu = true;

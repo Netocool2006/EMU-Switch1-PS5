@@ -126,8 +126,10 @@ const std::vector<std::string> kServerSources[] = {{"Home"}, {"Home", "Office"},
 // The same labels as the console's settings (headless/settings_store.h), translated like them.
 constexpr const char *kResolutionLabels[] = {"0.5x (faster, softer)", "0.75x (faster)",
                                              "1x (native)", "1.5x (sharper)", "2x (sharpest)",
-                                             "3x (slower)", "4x (slowest)"};
-const std::vector<std::string> kResolutionKeys = {"0.5x", "0.75x", "1x", "1.5x", "2x", "3x", "4x"};
+                                             "3x (slower)", "4x (slowest)", "5x (extreme)",
+                                             "6x (extreme)", "7x (extreme)", "8x (extreme)"};
+const std::vector<std::string> kResolutionKeys = {"0.5x", "0.75x", "1x", "1.5x", "2x", "3x", "4x",
+                                                  "5x", "6x", "7x", "8x"};
 constexpr const char *kFilterLabels[] = {"Bilinear", "AMD FSR", "Bicubic", "Nearest"};
 constexpr const char *kAstcLabels[] = {"Compressed", "Full quality"};
 constexpr const char *kLanguageLabels[] = {

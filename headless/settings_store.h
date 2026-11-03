@@ -3,11 +3,12 @@
 //
 //   {
 //     "version": 1,
-//     "video": { "renderer": "vulkan", "fps_overlay": true, "resolution": "1x",
+//     "video": { "renderer": "vulkan", "fps_overlay": true, "resolution": "5x", "pssr": false,
 //                "upscaling_filter": "bilinear", "astc_textures": "compressed",
 //                "refresh_rate": "60",
 //                "output_resolution": "1080p", "frame_gen": false, "frame_gen_method": "lsfg",
-//                "frame_gen_target": "auto", "frame_gen_multiplier": "2", "post_processing": "Cinematic" },
+//                "frame_gen_target": "auto", "frame_gen_multiplier": "2", "frame_gen_level": "auto",
+//                "post_processing": "Cinematic" },
 //     "audio": { "volume": 100, "mute": false, "menu_volume": 70 },
 //     "controls": { "vibration": true, "vibration_strength": 100,
 //                   "mapping": { "a": "cross", "b": "circle" } },
@@ -69,12 +70,18 @@ inline const char* BackendName(GraphicsBackend backend) {
 // Settings > Video: the internal rendering resolution (a scale of the game's own 720p handheld
 // or 1080p docked output) and the filter that scales the result to the TV output. 3x and 4x draw
 // nine and sixteen times the game's own pixels: they need the graphics memory for it.
-inline constexpr const char* kResolutionKeys[] = {"0.5x", "0.75x", "1x", "1.5x", "2x", "3x", "4x"};
+inline constexpr const char* kResolutionKeys[] = {"0.5x", "0.75x", "1x", "1.5x", "2x", "3x", "4x",
+                                                  "5x", "6x", "7x", "8x"};
 inline constexpr const char* kResolutionLabels[] = {"0.5x (faster, softer)", "0.75x (faster)", "1x (native)",
                                                     "1.5x (sharper)", "2x (sharpest)", "3x (slower)",
-                                                    "4x (slowest)"};
+                                                    "4x (slowest)", "5x (extreme)", "6x (extreme)",
+                                                    "7x (extreme)", "8x (extreme)"};
 static_assert(std::size(kResolutionLabels) == std::size(kResolutionKeys));
 inline constexpr int kNativeResolution = 2;
+// The scale a fresh settings file starts at: 5x, with PSSR 2 (video.pssr) drawing at 1x and
+// upscaling to the output when it is on.
+inline constexpr int kDefaultResolution = 7;  // "5x"
+static_assert(std::string_view(kResolutionKeys[kDefaultResolution]) == std::string_view("5x"));
 inline constexpr const char* kUpscalingFilterKeys[] = {"bilinear", "fsr", "bicubic", "nearest"};
 inline constexpr const char* kUpscalingFilterLabels[] = {"Bilinear", "AMD FSR", "Bicubic", "Nearest"};
 // Settings > Video: how a texture in ASTC, a format the console's GPU cannot read, is held.
@@ -103,6 +110,13 @@ static_assert(std::size(kFrameGenTargetKeys) == std::size(kFrameGenTargetHz));
 inline constexpr const char* kFrameGenMultiplierKeys[] = {"2", "3", "4"};
 inline constexpr int kFrameGenMultiplierValue[] = {2, 3, 4};
 static_assert(std::size(kFrameGenMultiplierKeys) == std::size(kFrameGenMultiplierValue));
+// MihawkGen's level: how many frames it adds to each one the game draws. "auto" leaves its
+// controller in charge (it adds nothing to a game that makes 60 and only starts under 40 fps);
+// 1 to 3 fix the level (mihawkgen_bridge.h's level, which fg-level.txt in the app folder overrides).
+inline constexpr const char* kFrameGenLevelKeys[] = {"auto", "1", "2", "3"};
+inline constexpr const char* kFrameGenLevelLabels[] = {"Automatic (only below 40 fps)", "1 extra frame (30 -> 60)",
+                                                       "2 extra frames", "3 extra frames"};
+static_assert(std::size(kFrameGenLevelKeys) == std::size(kFrameGenLevelLabels));
 // Settings > Video > Overlay size: how large the overlay's chip is drawn. "regular" is the size
 // every earlier build drew; "medium" is one and a half times it; "large" is twice it, for reading
 // the line from across a room. The corner it stands in is a switch of its own
@@ -139,7 +153,7 @@ struct Preferences {
     bool mute = false;
     bool detailed_logging = false;
     GraphicsBackend backend = GraphicsBackend::Vulkan;
-    int resolution = kNativeResolution;  // index into kResolutionKeys
+    int resolution = kDefaultResolution; // index into kResolutionKeys (5x)
     int upscaling_filter = 0;            // index into kUpscalingFilterKeys
     int astc_textures = 0;               // index into kAstcTextureKeys (0 is compressed)
     int refresh = 0;                     // index into kRefreshKeys
@@ -148,7 +162,9 @@ struct Preferences {
     int frame_gen_method = 0;            // index into kFrameGenMethodKeys (0 is LSFG)
     int frame_gen_target = 0;            // index into kFrameGenTargetKeys (0 is "auto")
     int frame_gen_multiplier = 0;        // index into kFrameGenMultiplierKeys (0 is 2x)
-    std::string post_processing;         // Settings > Video > Post-processing: a preset's name ("": off)
+    int frame_gen_level = 0;             // index into kFrameGenLevelKeys (0 is "auto")
+    bool pssr = false;                   // PSSR 2 upscaling (PS5 Pro, Vulkan); pssr_off.txt overrides it off
+    std::string post_processing;        // Settings > Video > Post-processing: a preset's name ("": off)
     bool vibration = true;
     int vibration_strength = 100;        // percent of what a game asks for: 25, 50, 75 or 100
     int language = 0;                    // index into kLanguageKeys (English (US), Eden's default)
@@ -478,6 +494,10 @@ inline Preferences LoadPreferences(const std::string& file = SettingsFile()) {
     result.frame_gen_multiplier = KeyIndex(
         Settings::String(document, Json::json_pointer("/video/frame_gen_multiplier")),
         kFrameGenMultiplierKeys, int(std::size(kFrameGenMultiplierKeys)), result.frame_gen_multiplier);
+    result.frame_gen_level = KeyIndex(
+        Settings::String(document, Json::json_pointer("/video/frame_gen_level")),
+        kFrameGenLevelKeys, int(std::size(kFrameGenLevelKeys)), result.frame_gen_level);
+    result.pssr = Settings::Bool(document, Json::json_pointer("/video/pssr"), result.pssr);
     if (const auto preset = Settings::String(document, Json::json_pointer("/video/post_processing"));
         ValidPostProcessing(preset))
         result.post_processing = preset;
@@ -507,6 +527,12 @@ inline bool SavePreferences(const Preferences& value, const std::string& file = 
         value.astc_textures < 0 || value.astc_textures >= int(std::size(kAstcTextureKeys)) ||
         value.refresh < 0 || value.refresh >= int(std::size(kRefreshKeys)) ||
         value.output < 0 || value.output >= int(std::size(kOutputKeys)) ||
+        // PARTEA-VERIFICAR: the three frame_gen indexes were not range-checked before (an index past
+        // the list read past its keys); refused now like the other indexes.
+        value.frame_gen_method < 0 || value.frame_gen_method >= int(std::size(kFrameGenMethodKeys)) ||
+        value.frame_gen_target < 0 || value.frame_gen_target >= int(std::size(kFrameGenTargetKeys)) ||
+        value.frame_gen_multiplier < 0 || value.frame_gen_multiplier >= int(std::size(kFrameGenMultiplierKeys)) ||
+        value.frame_gen_level < 0 || value.frame_gen_level >= int(std::size(kFrameGenLevelKeys)) ||
         value.language < 0 || value.language >= int(std::size(kLanguageKeys)) ||
         value.hud_size < 0 || value.hud_size >= int(std::size(kHudSizeKeys)) ||
         value.hud_corner < 0 || value.hud_corner >= int(std::size(kHudCornerKeys)) ||
@@ -530,6 +556,8 @@ inline bool SavePreferences(const Preferences& value, const std::string& file = 
     document["video"]["frame_gen_method"] = kFrameGenMethodKeys[value.frame_gen_method];
     document["video"]["frame_gen_target"] = kFrameGenTargetKeys[value.frame_gen_target];
     document["video"]["frame_gen_multiplier"] = kFrameGenMultiplierKeys[value.frame_gen_multiplier];
+    document["video"]["frame_gen_level"] = kFrameGenLevelKeys[value.frame_gen_level];
+    document["video"]["pssr"] = value.pssr;
     if (value.post_processing.empty()) document["video"].erase("post_processing");
     else document["video"]["post_processing"] = value.post_processing;
     document["audio"]["volume"] = value.volume;

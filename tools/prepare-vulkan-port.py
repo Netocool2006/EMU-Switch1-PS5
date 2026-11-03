@@ -417,6 +417,21 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {'''),
 # decision (EDEN_DEV_GUEST cond= slots 13-19); hcr=exact sends the conditions Eden would draw
 # unconditionally, or predicate from a pending host query, to the exact CPU evaluation;
 # hcr=cpu evaluates every condition on the CPU and predicates from constant 0/1 buffers.
+# PSSR 2 (headless/pssr_bridge.cpp): the upscale pass takes the place of FSR's EASU and RCAS passes
+# when libScePsml's context exists (headless/vulkan_pssr_pass_*.inc). Without ENABLE_PSSR it compiles away.
+adapt('src/video_core/renderer_vulkan/present/fsr.cpp', 'vulkan_fsr.cpp', [
+    ('#include "video_core/vulkan_common/vulkan_device.h"',
+     '#include "video_core/vulkan_common/vulkan_device.h"\n#include <algorithm>\n#include <array>\n#include <cmath>\n#include <cstdio>\n#include <memory>\n#include <vector>\n'
+     '#include "diagnostics.h"\n#include "hud.h"\n#include "pssr_bridge.h"'),
+    ('using PushConstants = std::array<u32, 4 * 4>;',
+     'using PushConstants = std::array<u32, 4 * 4>;\n' + (port / 'vulkan_pssr_pass_decl.inc').read_text()),
+    ('    Images& images = m_dynamic_images[image_index];\n\n    VkImage easu_image',
+     '    Images& images = m_dynamic_images[image_index];\n' + (port / 'vulkan_pssr_pass_use.inc').read_text()
+     + '\n    VkImage easu_image'),
+    ('        TransitionImageLayout(cmdbuf, rcas_image, VK_IMAGE_LAYOUT_GENERAL);\n    });\n\n    return *images.image_views[Rcas];',
+     '        TransitionImageLayout(cmdbuf, rcas_image, VK_IMAGE_LAYOUT_GENERAL);\n    });\n'
+     + (port / 'vulkan_pssr_pass_end.inc').read_text() + '\n    return *images.image_views[Rcas];'),
+])
 adapt('src/video_core/renderer_vulkan/vk_query_cache.cpp', 'vulkan_query_cache.cpp', [
     ('#include "video_core/vulkan_common/vulkan_wrapper.h"\n',
      '#include "video_core/vulkan_common/vulkan_wrapper.h"\n#include "dev_vulkan.h"\n#include "performance.h"\n'),
@@ -821,7 +836,7 @@ adapt('src/video_core/renderer_vulkan/renderer_vulkan.h',
 adapt('src/video_core/renderer_vulkan/renderer_vulkan.cpp', 'vulkan_renderer.cpp', [
     ('#include "video_core/renderer_vulkan/renderer_vulkan.h"',
      '#include "video_core/renderer_vulkan/renderer_vulkan.h"\n#include "display_refresh.h"\n'
-     '#include "diagnostics.h"\n#include "hud.h"'),
+     '#include "diagnostics.h"\n#include "hud.h"\n#include "pssr_bridge.h"'),
     # The overlay's resolution piece (hud.h): the guest's own picture, taken as it is handed to the
     # display. The OpenGL renderer does not say, so the piece stays off there (vulkan_loading.inc
     # does the same for the loading screen).
@@ -856,6 +871,7 @@ adapt('src/video_core/renderer_vulkan/renderer_vulkan.cpp', 'vulkan_renderer.cpp
     # producer's next 8-draw dispatch (upstream does this only with LSFG).
     ('    present_manager.Present(frame);\n#ifdef HAS_LSFG\n    scheduler.DispatchWork();\n#endif',
      '    present_manager.Present(frame);\n    Eden::CountPresentedFrame();\n'
+     + (port / 'vulkan_pssr.inc').read_text() +
      '    scheduler.DispatchWork();'),
     # MihawkGen neural frame generation: skip the LSFG block when MihawkGen is active,
     # and run MihawkGen's own present path instead (headless/vulkan_mihawkgen.inc).
@@ -919,6 +935,16 @@ for stage in ('vert', 'frag'):
     words = struct.unpack('<' + 'I' * (len(data) // 4), data)
     shader_header += f'inline constexpr uint32_t EDEN_HUD_{stage.upper()}_SPV[] = {{\n'
     shader_header += ','.join(hex(word) for word in words) + '\n};\n'
+# Added: the optical flow compute shader for the upscaler's motion vectors (vulkan_pssr_flow.comp),
+# compiled and validated the same way and embedded as EDEN_PSSR_FLOW_COMP_SPV. Nothing uses it yet.
+binary = output / 'vulkan_pssr_flow.comp.spv'
+subprocess.run(['glslangValidator', '-V', '--target-env', 'vulkan1.0',
+                '-o', str(binary), str(port / 'vulkan_pssr_flow.comp')], check=True)
+subprocess.run(['spirv-val', '--target-env', 'vulkan1.0', str(binary)], check=True)
+data = binary.read_bytes()
+words = struct.unpack('<' + 'I' * (len(data) // 4), data)
+shader_header += 'inline constexpr uint32_t EDEN_PSSR_FLOW_COMP_SPV[] = {\n'
+shader_header += ','.join(hex(word) for word in words) + '\n};\n'
 path = output / 'vulkan_hud_shaders.h'
 if not path.exists() or path.read_text() != shader_header:
     path.write_text(shader_header)
@@ -1846,6 +1872,16 @@ for stage in ('vert', 'frag'):
     words = struct.unpack('<' + 'I' * (len(data) // 4), data)
     shader_header += f'inline constexpr uint32_t EDEN_HUD_{stage.upper()}_SPV[] = {{\n'
     shader_header += ','.join(hex(word) for word in words) + '\n};\n'
+# Added: the optical flow compute shader for the upscaler's motion vectors (vulkan_pssr_flow.comp),
+# compiled and validated the same way and embedded as EDEN_PSSR_FLOW_COMP_SPV. Nothing uses it yet.
+binary = output / 'vulkan_pssr_flow.comp.spv'
+subprocess.run(['glslangValidator', '-V', '--target-env', 'vulkan1.0',
+                '-o', str(binary), str(port / 'vulkan_pssr_flow.comp')], check=True)
+subprocess.run(['spirv-val', '--target-env', 'vulkan1.0', str(binary)], check=True)
+data = binary.read_bytes()
+words = struct.unpack('<' + 'I' * (len(data) // 4), data)
+shader_header += 'inline constexpr uint32_t EDEN_PSSR_FLOW_COMP_SPV[] = {\n'
+shader_header += ','.join(hex(word) for word in words) + '\n};\n'
 path = output / 'vulkan_hud_shaders.h'
 if not path.exists() or path.read_text() != shader_header:
     path.write_text(shader_header)

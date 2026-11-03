@@ -125,7 +125,7 @@ std::array<bool, 8> Launcher::switch_states(Modal modal) const
     switch (modal)
     {
     case Modal::video:
-        return {prefs_.hud, false, false};
+        return {prefs_.hud, prefs_.pssr, false}; // [0] the FPS overlay, [1] PSSR 2 (settings.cpp)
     case Modal::performance:
         return {prefs_.block_list,  prefs_.async_shaders,     prefs_.fast_gpu, prefs_.unsafe_cpu,
                 prefs_.unsafe_dma,  prefs_.reactive_flushing, prefs_.skip_invalidation,
